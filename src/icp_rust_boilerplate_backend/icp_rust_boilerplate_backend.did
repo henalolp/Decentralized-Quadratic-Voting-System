@@ -1,0 +1,48 @@
+type Error = variant {
+  InvalidInput : record { msg : text };
+  VotingNotStarted : record { msg : text };
+  NotFound : record { msg : text };
+  ProposalAlreadyStarted : record { msg : text };
+  NotAuthorized : record { msg : text };
+  InsufficientTokens : record { msg : text };
+  AlreadyExists : record { msg : text };
+  VotingEnded : record { msg : text };
+};
+type Proposal = record {
+  id : nat64;
+  title : text;
+  creator : principal;
+  description : text;
+  end_date : nat64;
+  created_at : nat64;
+  start_date : nat64;
+  votes_for : nat64;
+  votes_against : nat64;
+};
+type ProposalPayload = record {
+  title : text;
+  description : text;
+  end_date : text;
+  start_date : text;
+};
+type Result = variant { Ok : Proposal; Err : Error };
+type Result_1 = variant { Ok; Err : Error };
+type Result_2 = variant { Ok : record { nat64; nat64 }; Err : Error };
+type VotePayload = record {
+  is_for : bool;
+  tokens : nat64;
+  proposal_id : nat64;
+};
+service : {
+  create_proposal : (ProposalPayload) -> (Result);
+  delete_proposal : (nat64) -> (Result_1);
+  get_active_proposals : () -> (vec Proposal) query;
+  get_all_proposals : () -> (vec Proposal) query;
+  get_inactive_proposals : () -> (vec Proposal) query;
+  get_proposal : (nat64) -> (Result) query;
+  get_proposal_results : (nat64) -> (Result_2) query;
+  get_user_tokens : () -> (nat64) query;
+  get_vote_tokens : (nat64) -> (Result_1);
+  update_proposal : (nat64, ProposalPayload) -> (Result);
+  vote : (VotePayload) -> (Result_1);
+}
