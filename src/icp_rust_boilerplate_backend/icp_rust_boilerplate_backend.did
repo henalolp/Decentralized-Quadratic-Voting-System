@@ -10,6 +10,7 @@ type Error = variant {
 };
 type Proposal = record {
   id : nat64;
+  status : ProposalStatus;
   title : text;
   creator : principal;
   description : text;
@@ -25,6 +26,7 @@ type ProposalPayload = record {
   end_date : text;
   start_date : text;
 };
+type ProposalStatus = variant { Ended; Active; Pending };
 type Result = variant { Ok : Proposal; Err : Error };
 type Result_1 = variant { Ok; Err : Error };
 type Result_2 = variant { Ok : record { nat64; nat64 }; Err : Error };

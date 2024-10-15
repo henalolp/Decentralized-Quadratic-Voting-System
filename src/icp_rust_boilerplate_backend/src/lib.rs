@@ -39,6 +39,13 @@ type Memory = VirtualMemory<DefaultMemoryImpl>;
 type IdCell = Cell<u64, Memory>;
 
 #[derive(CandidType, Serialize, Deserialize, Clone)]
+enum ProposalStatus {
+    Pending,
+    Active,
+    Ended,
+}
+
+#[derive(CandidType, Serialize, Deserialize, Clone)]
 struct Proposal {
     id: u64,
     title: String,
@@ -49,6 +56,20 @@ struct Proposal {
     end_date: u64,
     votes_for: u64,
     votes_against: u64,
+    status: ProposalStatus,
+}
+
+impl Proposal {
+    fn update_status(&mut self) {
+        let current_time = time() / 1_000_000_000;
+        self.status = if current_time < self.start_date {
+            ProposalStatus::Pending
+        } else if current_time >= self.start_date && current_time <= self.end_date {
+            ProposalStatus::Active
+        } else {
+            ProposalStatus::Ended
+        };
+    }
 }
 
 #[derive(CandidType, Serialize, Deserialize, Clone)]
@@ -216,14 +237,17 @@ fn parse_date(date_str: &str) -> Result<(u64, u32, u32, u32), Error> {
 #[ic_cdk::query]
 fn get_proposal(id: u64) -> Result<Proposal, Error> {
     if id == 0 {
-        return Err(Error::InvalidInput { msg: "Invalid proposal ID. Input a valid proposal ID".to_string() });
+        return Err(Error::InvalidInput { msg: "Invalid proposal ID. ID cannot be 0.".to_string() });
     }
 
     PROPOSALS.with(|proposals| {
         proposals
             .borrow()
             .get(&id)
-            .map(|p| p.clone())
+            .map(|mut p| {
+                p.update_status();
+                p
+            })
             .ok_or(Error::NotFound { msg: "Proposal not found".to_string() })
     })
 }
@@ -268,6 +292,7 @@ fn create_proposal(payload: ProposalPayload) -> Result<Proposal, Error> {
         end_date: end_time,
         votes_for: 0,
         votes_against: 0,
+        status: ProposalStatus::Pending,
     };
 
     PROPOSALS.with(|proposals| {
@@ -362,13 +387,18 @@ fn get_proposal_results(id: u64) -> Result<(u64, u64), Error> {
 
 #[ic_cdk::query]
 fn get_active_proposals() -> Vec<Proposal> {
-    let current_time = ic_cdk::api::time() / 1_000_000_000; // Convert nanoseconds to seconds
+    let current_time = ic_cdk::api::time() / 1_000_000_000;
     PROPOSALS.with(|proposals| {
         proposals
             .borrow()
             .iter()
-            .filter(|(_, proposal)| proposal.start_date <= current_time && proposal.end_date > current_time)
-            .map(|(_, proposal)| proposal.clone())
+            .filter(|(_, proposal)| {
+                proposal.start_date <= current_time && proposal.end_date > current_time
+            })
+            .map(|(_, mut proposal)| {
+                proposal.update_status();
+                proposal
+            })
             .collect()
     })
 }
@@ -381,7 +411,10 @@ fn get_inactive_proposals() -> Vec<Proposal> {
             .borrow()
             .iter()
             .filter(|(_, p)| p.end_date < current_time)
-            .map(|(_, p)| p.clone())
+            .map(|(_, mut p)| {
+                p.update_status();
+                p
+            })
             .collect()
     })
 }
@@ -392,7 +425,10 @@ fn get_all_proposals() -> Vec<Proposal> {
         proposals
             .borrow()
             .iter()
-            .map(|(_, p)| p.clone())
+            .map(|(_, mut p)| {
+                p.update_status();
+                p
+            })
             .collect()
     })
 }
