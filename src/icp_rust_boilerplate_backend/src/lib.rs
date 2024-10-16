@@ -131,13 +131,6 @@ thread_local! {
     static USER_TOKENS: RefCell<HashMap<PrincipalWrapper, u64>> = RefCell::new(HashMap::new());
 }
 
-// #[derive(CandidType, Serialize, Deserialize)]
-// struct ProposalPayload {
-//     title: String,
-//     description: String,
-//     duration: u64,
-// }
-
 #[derive(CandidType, Deserialize)]
 struct ProposalPayload {
     title: String,
@@ -161,11 +154,10 @@ enum Error {
     VotingEnded { msg: String },
     InvalidInput { msg: String },
     VotingNotStarted { msg: String },
-    ProposalAlreadyStarted { msg: String }, // Add this line
+    ProposalAlreadyStarted { msg: String },
     InsufficientTokens { msg: String },
 }
 
-// Helper function to get current date components
 fn get_current_date() -> (u32, u32, u32) {
     let current_time = (time() / 1_000_000_000) as u64; // Convert nanoseconds to seconds
     let days_since_epoch = current_time / (24 * 60 * 60);
@@ -188,12 +180,10 @@ fn get_current_date() -> (u32, u32, u32) {
     (year as u32, month as u32, day)
 }
 
-// Helper function to check if a year is a leap year
 fn is_leap_year(year: u32) -> bool {
-    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+    year % 4 == 0 && (year % 100!= 0 || year % 400 == 0)
 }
 
-// Helper function to get the number of days in a month
 fn days_in_month(year: u32, month: u32) -> u32 {
     match month {
         4 | 6 | 9 | 11 => 30,
@@ -202,7 +192,6 @@ fn days_in_month(year: u32, month: u32) -> u32 {
     }
 }
 
-// Helper function to convert date to timestamp
 fn date_to_timestamp(year: u32, month: u32, day: u32) -> u64 {
     let mut days = 0;
     for y in 1970..year {
@@ -217,7 +206,7 @@ fn date_to_timestamp(year: u32, month: u32, day: u32) -> u64 {
 
 fn parse_date(date_str: &str) -> Result<(u64, u32, u32, u32), Error> {
     let parts: Vec<&str> = date_str.split('-').collect();
-    if parts.len() != 3 {
+    if parts.len()!= 3 {
         return Err(Error::InvalidInput { msg: "Invalid date format. Use DD-MM-YYYY".to_string() });
     }
     
@@ -242,13 +231,13 @@ fn get_proposal(id: u64) -> Result<Proposal, Error> {
 
     PROPOSALS.with(|proposals| {
         proposals
-            .borrow()
-            .get(&id)
-            .map(|mut p| {
+           .borrow()
+           .get(&id)
+           .map(|mut p| {
                 p.update_status();
                 p
             })
-            .ok_or(Error::NotFound { msg: "Proposal not found".to_string() })
+           .ok_or(Error::NotFound { msg: "Proposal not found".to_string() })
     })
 }
 
@@ -278,7 +267,7 @@ fn create_proposal(payload: ProposalPayload) -> Result<Proposal, Error> {
     let id = ID_COUNTER.with(|counter| {
         let current_value = *counter.borrow().get();
         counter.borrow_mut().set(current_value + 1)
-            .expect("Failed to increment counter");
+          .expect("Failed to increment counter");
         current_value
     });
 
@@ -311,7 +300,6 @@ fn vote(payload: VotePayload) -> Result<(), Error> {
     let caller = ic_cdk::caller();
     let current_time = ic_cdk::api::time() / 1_000_000_000;
 
-    // Check if the user has enough tokens before proceeding
     let user_tokens = USER_TOKENS.with(|tokens| {
         tokens.borrow().get(&PrincipalWrapper(caller)).cloned().unwrap_or(3)
     });
@@ -323,13 +311,12 @@ fn vote(payload: VotePayload) -> Result<(), Error> {
     PROPOSALS.with(|proposals| {
         let mut proposals = proposals.borrow_mut();
         if let Some(proposal) = proposals.get(&payload.proposal_id) {
-            let mut proposal = proposal.clone(); // Clone the proposal here
+            let mut proposal = proposal.clone();
             if current_time < proposal.start_date {
                 Err(Error::VotingNotStarted { msg: "Voting has not started yet".to_string() })
             } else if current_time > proposal.end_date {
                 Err(Error::VotingEnded { msg: "Voting has ended".to_string() })
             } else {
-                // Vote is valid, update the proposal
                 if payload.is_for {
                     proposal.votes_for += payload.tokens;
                 } else {
@@ -337,14 +324,12 @@ fn vote(payload: VotePayload) -> Result<(), Error> {
                 }
                 proposals.insert(payload.proposal_id, proposal);
 
-                // Deduct tokens only after successful vote
                 USER_TOKENS.with(|tokens| {
                     let mut tokens = tokens.borrow_mut();
                     let current_tokens = tokens.get(&PrincipalWrapper(caller)).cloned().unwrap_or(3);
                     tokens.insert(PrincipalWrapper(caller), current_tokens - payload.tokens);
                 });
 
-                // Record the vote
                 VOTES.with(|votes| {
                     votes.borrow_mut().insert(
                         (PrincipalWrapper(caller), payload.proposal_id),
@@ -385,16 +370,16 @@ fn get_active_proposals() -> Vec<Proposal> {
     let current_time = ic_cdk::api::time() / 1_000_000_000;
     PROPOSALS.with(|proposals| {
         proposals
-            .borrow()
-            .iter()
-            .filter(|(_, proposal)| {
+          .borrow()
+          .iter()
+          .filter(|(_, proposal)| {
                 proposal.start_date <= current_time && proposal.end_date > current_time
             })
-            .map(|(_, mut proposal)| {
+          .map(|(_, mut proposal)| {
                 proposal.update_status();
                 proposal
             })
-            .collect()
+          .collect()
     })
 }
 
@@ -403,14 +388,14 @@ fn get_inactive_proposals() -> Vec<Proposal> {
     let current_time = ic_cdk::api::time() / 1_000_000_000;
     PROPOSALS.with(|proposals| {
         proposals
-            .borrow()
-            .iter()
-            .filter(|(_, p)| p.end_date < current_time)
-            .map(|(_, mut p)| {
+          .borrow()
+          .iter()
+          .filter(|(_, p)| p.end_date < current_time)
+          .map(|(_, mut p)| {
                 p.update_status();
                 p
             })
-            .collect()
+          .collect()
     })
 }
 
@@ -418,13 +403,13 @@ fn get_inactive_proposals() -> Vec<Proposal> {
 fn get_all_proposals() -> Vec<Proposal> {
     PROPOSALS.with(|proposals| {
         proposals
-            .borrow()
-            .iter()
-            .map(|(_, mut p)| {
+          .borrow()
+          .iter()
+          .map(|(_, mut p)| {
                 p.update_status();
                 p
             })
-            .collect()
+          .collect()
     })
 }
 
@@ -437,11 +422,10 @@ fn update_proposal(id: u64, payload: ProposalPayload) -> Result<Proposal, Error>
     PROPOSALS.with(|proposals| {
         let mut proposals = proposals.borrow_mut();
         if let Some(proposal) = proposals.get(&id).map(|p| p.clone()) {
-            // Update the proposal fields
             let updated_proposal = Proposal {
                 title: payload.title,
                 description: payload.description,
-                ..proposal
+               ..proposal
             };
             proposals.insert(id, updated_proposal.clone());
             Ok(updated_proposal)
@@ -460,7 +444,7 @@ fn delete_proposal(id: u64) -> Result<(), Error> {
     PROPOSALS.with(|proposals| {
         let mut proposals = proposals.borrow_mut();
         if let Some(proposal) = proposals.get(&id) {
-            if proposal.creator != PrincipalWrapper(ic_cdk::caller()) {
+            if proposal.creator!= PrincipalWrapper(ic_cdk::caller()) {
                 return Err(Error::NotAuthorized { msg: "Not authorized to delete this proposal".to_string() });
             }
             if proposal.start_date <= ic_cdk::api::time() / 1_000_000_000 {
@@ -488,6 +472,7 @@ fn get_vote_tokens(amount: u64) -> Result<(), Error> {
 #[ic_cdk::query]
 fn get_user_tokens() -> u64 {
     let caller = PrincipalWrapper(ic_cdk::caller());
+    initialize_user_tokens(&caller);
     USER_TOKENS.with(|tokens| {
         *tokens.borrow().get(&caller).unwrap_or(&3)
     })
@@ -495,9 +480,75 @@ fn get_user_tokens() -> u64 {
 
 fn initialize_user_tokens(caller: &PrincipalWrapper) {
     USER_TOKENS.with(|tokens| {
-        tokens.borrow_mut().entry(caller.clone()).or_insert(3);
+        if!tokens.borrow().contains_key(caller) {
+            tokens.borrow_mut().entry(caller.clone()).or_insert(3);
+        }
     });
 }
 
-// Candid export
+#[ic_cdk::query]
+fn get_user_votes() -> Vec<Vote> {
+    let caller = PrincipalWrapper(ic_cdk::caller());
+    VOTES.with(|votes| {
+        votes.borrow()
+            .iter()
+            .filter(|((user, _), _)| *user == caller)
+            .map(|(_, vote)| vote.clone())
+            .collect()
+    })
+}
+
+#[ic_cdk::update]
+fn transfer_tokens(target: Principal, amount: u64) -> Result<(), Error> {
+    let caller = PrincipalWrapper(ic_cdk::caller());
+    let target = PrincipalWrapper(target);
+    if amount <= 0 {
+        return Err(Error::InvalidInput { msg: "Transfer amount must be greater than zero".to_string() });
+    }
+    
+    let caller_tokens = USER_TOKENS.with(|tokens| {
+        tokens.borrow().get(&caller).cloned().unwrap_or(3)
+    });
+    
+    if caller_tokens < amount {
+        return Err(Error::InsufficientTokens { msg: "Not enough tokens to transfer".to_string() });
+    }
+    
+    USER_TOKENS.with(|tokens| {
+        let mut tokens = tokens.borrow_mut();
+        *tokens.entry(caller).or_insert(3) -= amount;
+        *tokens.entry(target).or_insert(0) += amount;
+    });
+    Ok(())
+}
+
+#[ic_cdk::update]
+fn update_user_tokens_manually(user: Principal, new_amount: u64) -> Result<(), Error> {
+    // **CAUTION:** This function should be used sparingly and with caution.
+    // Ideally, it should be protected by an administrative canister or a more sophisticated access control mechanism.
+    let caller = ic_cdk::caller();
+    
+    let user = PrincipalWrapper(user);
+    USER_TOKENS.with(|tokens| {
+        tokens.borrow_mut().insert(user, new_amount);
+    });
+    Ok(())
+}
+
+#[ic_cdk::query]
+fn get_proposal_by_creator() -> Vec<Proposal> {
+    let creator = PrincipalWrapper(ic_cdk::caller());
+    PROPOSALS.with(|proposals| {
+        proposals
+         .borrow()
+         .iter()
+         .filter(|(_, proposal)| proposal.creator == creator)
+         .map(|(_, mut proposal)| {
+                proposal.update_status();
+                proposal
+            })
+         .collect()
+    })
+}
+
 ic_cdk::export_candid!();
