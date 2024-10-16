@@ -305,69 +305,64 @@ fn create_proposal(payload: ProposalPayload) -> Result<Proposal, Error> {
 #[ic_cdk::update]
 fn vote(payload: VotePayload) -> Result<(), Error> {
     if payload.proposal_id == 0 {
-        return Err(Error::InvalidInput { msg: "Invalid proposal ID. Input a valid proposal ID".to_string() });
+        return Err(Error::InvalidInput { msg: "Invalid proposal ID. ID cannot be 0.".to_string() });
     }
 
-    let caller = PrincipalWrapper(ic_cdk::caller());
-    let proposal_id = payload.proposal_id;
-    let is_for = payload.is_for;
-    let tokens = payload.tokens;
-
-    // Check if user has enough tokens
-    USER_TOKENS.with(|ut| {
-        let mut ut = ut.borrow_mut();
-        let current_tokens = ut.entry(caller.clone()).or_insert(3);
-        if *current_tokens < tokens {
-            return Err(Error::InsufficientTokens { msg: "Not enough tokens to vote".to_string() });
-        }
-        *current_tokens -= tokens;
-        Ok(())
-    })?;
-
-    // First, check if the proposal exists and if voting is allowed
-    let proposal = PROPOSALS.with(|proposals| {
-        proposals
-            .borrow()
-            .get(&proposal_id)
-            .map(|p| p.clone())
-            .ok_or(Error::NotFound { msg: "Proposal not found".to_string() })
-    })?;
-
+    let caller = ic_cdk::caller();
     let current_time = ic_cdk::api::time() / 1_000_000_000;
-    if current_time < proposal.start_date {
-        return Err(Error::VotingNotStarted { msg: "Voting has not started yet".to_string() });
-    }
-    if current_time > proposal.end_date {
-        return Err(Error::VotingEnded { msg: "Voting has ended".to_string() });
+
+    // Check if the user has enough tokens before proceeding
+    let user_tokens = USER_TOKENS.with(|tokens| {
+        tokens.borrow().get(&PrincipalWrapper(caller)).cloned().unwrap_or(3)
+    });
+
+    if user_tokens < payload.tokens {
+        return Err(Error::InsufficientTokens { msg: "Not enough tokens to cast vote".to_string() });
     }
 
-    // Now, update the vote count
     PROPOSALS.with(|proposals| {
         let mut proposals = proposals.borrow_mut();
-        if let Some(mut proposal) = proposals.remove(&proposal_id) {
-            if is_for {
-                proposal.votes_for += tokens;
+        if let Some(proposal) = proposals.get(&payload.proposal_id) {
+            let mut proposal = proposal.clone(); // Clone the proposal here
+            if current_time < proposal.start_date {
+                Err(Error::VotingNotStarted { msg: "Voting has not started yet".to_string() })
+            } else if current_time > proposal.end_date {
+                Err(Error::VotingEnded { msg: "Voting has ended".to_string() })
             } else {
-                proposal.votes_against += tokens;
+                // Vote is valid, update the proposal
+                if payload.is_for {
+                    proposal.votes_for += payload.tokens;
+                } else {
+                    proposal.votes_against += payload.tokens;
+                }
+                proposals.insert(payload.proposal_id, proposal);
+
+                // Deduct tokens only after successful vote
+                USER_TOKENS.with(|tokens| {
+                    let mut tokens = tokens.borrow_mut();
+                    let current_tokens = tokens.get(&PrincipalWrapper(caller)).cloned().unwrap_or(3);
+                    tokens.insert(PrincipalWrapper(caller), current_tokens - payload.tokens);
+                });
+
+                // Record the vote
+                VOTES.with(|votes| {
+                    votes.borrow_mut().insert(
+                        (PrincipalWrapper(caller), payload.proposal_id),
+                        Vote {
+                            user: PrincipalWrapper(caller),
+                            proposal_id: payload.proposal_id,
+                            vote_power: payload.tokens,
+                            is_for: payload.is_for,
+                        },
+                    );
+                });
+
+                Ok(())
             }
-            proposals.insert(proposal_id, proposal);
+        } else {
+            Err(Error::NotFound { msg: "Proposal not found".to_string() })
         }
-    });
-
-    // Finally, record the vote
-    VOTES.with(|votes| {
-        votes.borrow_mut().insert(
-            (caller.clone(), proposal_id),
-            Vote {
-                user: caller,
-                proposal_id,
-                vote_power: tokens,
-                is_for,
-            },
-        )
-    });
-
-    Ok(())
+    })
 }
 
 #[ic_cdk::query]
