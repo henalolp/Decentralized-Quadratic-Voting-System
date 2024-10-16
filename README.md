@@ -85,6 +85,8 @@ Proposals are stored in a stable-structures database and are indexed by their ID
 ### Voting System
 
 Voting is token-based, with each user having a certain number of tokens they can allocate to proposals. The voting power is proportional to the number of tokens allocated.
+Initially you have 3 vote tokens, you could get some vote tokens by using the get_vote_tokens method and providing the number of vote tokens needed. For testing purpose, the tokens will be provided without actual cost.
+In a real platform, this could be setup such that users will be billed to get extra tokens to vote.
 
 
 ### Main Functions
