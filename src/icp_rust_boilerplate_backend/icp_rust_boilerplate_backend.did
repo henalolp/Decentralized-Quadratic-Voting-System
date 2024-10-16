@@ -30,6 +30,12 @@ type ProposalStatus = variant { Ended; Active; Pending };
 type Result = variant { Ok : Proposal; Err : Error };
 type Result_1 = variant { Ok; Err : Error };
 type Result_2 = variant { Ok : record { nat64; nat64 }; Err : Error };
+type Vote = record {
+  vote_power : nat64;
+  user : principal;
+  is_for : bool;
+  proposal_id : nat64;
+};
 type VotePayload = record {
   is_for : bool;
   tokens : nat64;
@@ -42,9 +48,13 @@ service : {
   get_all_proposals : () -> (vec Proposal) query;
   get_inactive_proposals : () -> (vec Proposal) query;
   get_proposal : (nat64) -> (Result) query;
+  get_proposal_by_creator : () -> (vec Proposal) query;
   get_proposal_results : (nat64) -> (Result_2) query;
   get_user_tokens : () -> (nat64) query;
+  get_user_votes : () -> (vec Vote) query;
   get_vote_tokens : (nat64) -> (Result_1);
+  transfer_tokens : (principal, nat64) -> (Result_1);
   update_proposal : (nat64, ProposalPayload) -> (Result);
+  update_user_tokens_manually : (principal, nat64) -> (Result_1);
   vote : (VotePayload) -> (Result_1);
 }
