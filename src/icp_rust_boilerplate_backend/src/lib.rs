@@ -15,11 +15,11 @@ impl Hash for PrincipalWrapper {
 }
 
 impl Storable for PrincipalWrapper {
-    fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
+    fn to_bytes(&self) -> Cow<[u8]> {
         Cow::Owned(self.0.as_slice().to_vec())
     }
 
-    fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
+    fn from_bytes(bytes: Cow<[u8]>) -> Self {
         Self(Principal::from_slice(&bytes))
     }
 }
@@ -81,11 +81,11 @@ struct Vote {
 }
 
 impl Storable for Proposal {
-    fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
+    fn to_bytes(&self) -> Cow<[u8]> {
         Cow::Owned(Encode!(self).unwrap())
     }
 
-    fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
+    fn from_bytes(bytes: Cow<[u8]>) -> Self {
         Decode!(bytes.as_ref(), Self).unwrap()
     }
 }
@@ -96,11 +96,11 @@ impl BoundedStorable for Proposal {
 }
 
 impl Storable for Vote {
-    fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
+    fn to_bytes(&self) -> Cow<[u8]> {
         Cow::Owned(Encode!(self).unwrap())
     }
 
-    fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
+    fn from_bytes(bytes: Cow<[u8]>) -> Self {
         Decode!(bytes.as_ref(), Self).unwrap()
     }
 }
@@ -181,14 +181,14 @@ fn get_current_date() -> (u32, u32, u32) {
 }
 
 fn is_leap_year(year: u32) -> bool {
-    year % 4 == 0 && (year % 100!= 0 || year % 400 == 0)
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 fn days_in_month(year: u32, month: u32) -> u32 {
     match month {
         4 | 6 | 9 | 11 => 30,
         2 => if is_leap_year(year) { 29 } else { 28 },
-        _ => 31
+        _ => 31,
     }
 }
 
@@ -206,7 +206,7 @@ fn date_to_timestamp(year: u32, month: u32, day: u32) -> u64 {
 
 fn parse_date(date_str: &str) -> Result<(u64, u32, u32, u32), Error> {
     let parts: Vec<&str> = date_str.split('-').collect();
-    if parts.len()!= 3 {
+    if parts.len() != 3 {
         return Err(Error::InvalidInput { msg: "Invalid date format. Use DD-MM-YYYY".to_string() });
     }
     
@@ -231,13 +231,13 @@ fn get_proposal(id: u64) -> Result<Proposal, Error> {
 
     PROPOSALS.with(|proposals| {
         proposals
-           .borrow()
-           .get(&id)
-           .map(|mut p| {
+            .borrow()
+            .get(&id)
+            .map(|mut p| {
                 p.update_status();
                 p
             })
-           .ok_or(Error::NotFound { msg: "Proposal not found".to_string() })
+            .ok_or(Error::NotFound { msg: "Proposal not found".to_string() })
     })
 }
 
@@ -245,31 +245,20 @@ fn get_proposal(id: u64) -> Result<Proposal, Error> {
 fn create_proposal(payload: ProposalPayload) -> Result<Proposal, Error> {
     let current_time = time() / 1_000_000_000; // Convert nanoseconds to seconds
     let (current_year, current_month, current_day) = get_current_date();
-    
+
+    // Validate dates
     let (start_timestamp, start_year, start_month, start_day) = parse_date(&payload.start_date)?;
-    let (end_timestamp, _, _, _) = parse_date(&payload.end_date)?;
+    let (end_timestamp, end_year, end_month, end_day) = parse_date(&payload.end_date)?;
 
-    let start_time = if (start_year, start_month, start_day) == (current_year, current_month, current_day) {
-        current_time
-    } else if start_timestamp < current_time {
-        return Err(Error::InvalidInput { msg: "Start date must be in the future".to_string() });
-    } else {
-        start_timestamp
-    };
-
-    let time_of_day = current_time % (24 * 60 * 60);
-    let end_time = end_timestamp + time_of_day;
-
-    if end_time <= start_time {
+    if end_timestamp <= start_timestamp {
         return Err(Error::InvalidInput { msg: "End date must be after start date".to_string() });
     }
+    if current_year < start_year || (current_year == start_year && (current_month < start_month || (current_month == start_month && current_day < start_day))) {
+        return Err(Error::InvalidInput { msg: "Start date must be in the future".to_string() });
+    }
 
-    let id = ID_COUNTER.with(|counter| {
-        let current_value = *counter.borrow().get();
-        counter.borrow_mut().set(current_value + 1)
-          .expect("Failed to increment counter");
-        current_value
-    });
+    let mut id_counter = ID_COUNTER.with(|cell| cell.borrow_mut());
+    let id = id_counter.increment();
 
     let proposal = Proposal {
         id,
@@ -277,278 +266,71 @@ fn create_proposal(payload: ProposalPayload) -> Result<Proposal, Error> {
         description: payload.description,
         creator: PrincipalWrapper(ic_cdk::caller()),
         created_at: current_time,
-        start_date: start_time,
-        end_date: end_time,
+        start_date: start_timestamp,
+        end_date: end_timestamp,
         votes_for: 0,
         votes_against: 0,
         status: ProposalStatus::Pending,
     };
 
     PROPOSALS.with(|proposals| {
-        proposals.borrow_mut().insert(id, proposal.clone());
+        if proposals.borrow_mut().insert(id, proposal.clone()).is_some() {
+            return Err(Error::AlreadyExists { msg: "Proposal with this ID already exists".to_string() });
+        }
     });
 
     Ok(proposal)
 }
 
 #[ic_cdk::update]
-fn vote(payload: VotePayload) -> Result<(), Error> {
-    if payload.proposal_id == 0 {
-        return Err(Error::InvalidInput { msg: "Invalid proposal ID. ID cannot be 0.".to_string() });
-    }
+fn vote_on_proposal(payload: VotePayload) -> Result<String, Error> {
+    let caller = PrincipalWrapper(ic_cdk::caller());
+    let current_time = time() / 1_000_000_000;
 
-    let caller = ic_cdk::caller();
-    let current_time = ic_cdk::api::time() / 1_000_000_000;
-
-    let user_tokens = USER_TOKENS.with(|tokens| {
-        tokens.borrow().get(&PrincipalWrapper(caller)).cloned().unwrap_or(3)
-    });
-
-    if user_tokens < payload.tokens {
-        return Err(Error::InsufficientTokens { msg: "Not enough tokens to cast vote".to_string() });
+    // Check user tokens
+    let mut user_tokens = USER_TOKENS.borrow_mut();
+    let user_balance = user_tokens.entry(caller.clone()).or_insert(0);
+    if *user_balance < payload.tokens {
+        return Err(Error::InsufficientTokens { msg: "Not enough tokens to vote".to_string() });
     }
 
     PROPOSALS.with(|proposals| {
         let mut proposals = proposals.borrow_mut();
-        if let Some(proposal) = proposals.get(&payload.proposal_id) {
-            let mut proposal = proposal.clone();
-            if current_time < proposal.start_date {
-                Err(Error::VotingNotStarted { msg: "Voting has not started yet".to_string() })
-            } else if current_time > proposal.end_date {
-                Err(Error::VotingEnded { msg: "Voting has ended".to_string() })
-            } else {
-                if payload.is_for {
-                    proposal.votes_for += payload.tokens;
-                } else {
-                    proposal.votes_against += payload.tokens;
-                }
-                proposals.insert(payload.proposal_id, proposal);
+        let proposal = proposals.get_mut(&payload.proposal_id)
+            .ok_or(Error::NotFound { msg: "Proposal not found".to_string() })?;
 
-                USER_TOKENS.with(|tokens| {
-                    let mut tokens = tokens.borrow_mut();
-                    let current_tokens = tokens.get(&PrincipalWrapper(caller)).cloned().unwrap_or(3);
-                    tokens.insert(PrincipalWrapper(caller), current_tokens - payload.tokens);
-                });
+        proposal.update_status();
 
-                VOTES.with(|votes| {
-                    votes.borrow_mut().insert(
-                        (PrincipalWrapper(caller), payload.proposal_id),
-                        Vote {
-                            user: PrincipalWrapper(caller),
-                            proposal_id: payload.proposal_id,
-                            vote_power: payload.tokens,
-                            is_for: payload.is_for,
-                        },
-                    );
-                });
+        if proposal.status == ProposalStatus::Ended {
+            return Err(Error::VotingEnded { msg: "Voting has already ended for this proposal".to_string() });
+        }
 
-                Ok(())
+        if proposal.start_date > current_time {
+            return Err(Error::VotingNotStarted { msg: "Voting has not yet started for this proposal".to_string() });
+        }
+
+        let vote = Vote {
+            user: caller.clone(),
+            proposal_id: payload.proposal_id,
+            vote_power: payload.tokens,
+            is_for: payload.is_for,
+        };
+
+        // Update proposal votes
+        if payload.is_for {
+            proposal.votes_for += payload.tokens;
+        } else {
+            proposal.votes_against += payload.tokens;
+        }
+
+        // Store vote
+        VOTES.with(|votes| {
+            if votes.borrow_mut().insert((caller.clone(), payload.proposal_id), vote).is_some() {
+                return Err(Error::AlreadyExists { msg: "User has already voted on this proposal".to_string() });
             }
-        } else {
-            Err(Error::NotFound { msg: "Proposal not found".to_string() })
-        }
+        });
+
+        *user_balance -= payload.tokens; // Deduct user tokens after vote
+        Ok("Vote recorded successfully".to_string())
     })
 }
-
-#[ic_cdk::query]
-fn get_proposal_results(id: u64) -> Result<(u64, u64), Error> {
-    if id == 0 {
-        return Err(Error::InvalidInput { msg: "Invalid proposal ID. Input a valid proposal ID".to_string() });
-    }
-
-    PROPOSALS.with(|proposals| {
-        if let Some(proposal) = proposals.borrow().get(&id) {
-            Ok((proposal.votes_for, proposal.votes_against))
-        } else {
-            Err(Error::NotFound { msg: "Proposal not found".to_string() })
-        }
-    })
-}
-
-#[ic_cdk::query]
-fn get_active_proposals() -> Vec<Proposal> {
-    let current_time = ic_cdk::api::time() / 1_000_000_000;
-    PROPOSALS.with(|proposals| {
-        proposals
-          .borrow()
-          .iter()
-          .filter(|(_, proposal)| {
-                proposal.start_date <= current_time && proposal.end_date > current_time
-            })
-          .map(|(_, mut proposal)| {
-                proposal.update_status();
-                proposal
-            })
-          .collect()
-    })
-}
-
-#[ic_cdk::query]
-fn get_inactive_proposals() -> Vec<Proposal> {
-    let current_time = ic_cdk::api::time() / 1_000_000_000;
-    PROPOSALS.with(|proposals| {
-        proposals
-          .borrow()
-          .iter()
-          .filter(|(_, p)| p.end_date < current_time)
-          .map(|(_, mut p)| {
-                p.update_status();
-                p
-            })
-          .collect()
-    })
-}
-
-#[ic_cdk::query]
-fn get_all_proposals() -> Vec<Proposal> {
-    PROPOSALS.with(|proposals| {
-        proposals
-          .borrow()
-          .iter()
-          .map(|(_, mut p)| {
-                p.update_status();
-                p
-            })
-          .collect()
-    })
-}
-
-#[ic_cdk::update]
-fn update_proposal(id: u64, payload: ProposalPayload) -> Result<Proposal, Error> {
-    if id == 0 {
-        return Err(Error::InvalidInput { msg: "Invalid proposal ID. Input a valid proposal ID".to_string() });
-    }
-
-    PROPOSALS.with(|proposals| {
-        let mut proposals = proposals.borrow_mut();
-        if let Some(proposal) = proposals.get(&id).map(|p| p.clone()) {
-            let updated_proposal = Proposal {
-                title: payload.title,
-                description: payload.description,
-               ..proposal
-            };
-            proposals.insert(id, updated_proposal.clone());
-            Ok(updated_proposal)
-        } else {
-            Err(Error::NotFound { msg: "Proposal not found".to_string() })
-        }
-    })
-}
-
-#[ic_cdk::update]
-fn delete_proposal(id: u64) -> Result<(), Error> {
-    if id == 0 {
-        return Err(Error::InvalidInput { msg: "Invalid proposal ID. Input a valid proposal ID".to_string() });
-    }
-
-    PROPOSALS.with(|proposals| {
-        let mut proposals = proposals.borrow_mut();
-        if let Some(proposal) = proposals.get(&id) {
-            if proposal.creator!= PrincipalWrapper(ic_cdk::caller()) {
-                return Err(Error::NotAuthorized { msg: "Not authorized to delete this proposal".to_string() });
-            }
-            if proposal.start_date <= ic_cdk::api::time() / 1_000_000_000 {
-                return Err(Error::ProposalAlreadyStarted { msg: "Cannot delete a proposal that has already started".to_string() });
-            }
-            proposals.remove(&id);
-            Ok(())
-        } else {
-            Err(Error::NotFound { msg: "Proposal not found".to_string() })
-        }
-    })
-}
-
-#[ic_cdk::update]
-fn get_vote_tokens(amount: u64) -> Result<(), Error> {
-    let caller = PrincipalWrapper(ic_cdk::caller());
-    USER_TOKENS.with(|tokens| {
-        let mut tokens = tokens.borrow_mut();
-        let current_tokens = tokens.entry(caller).or_insert(3);
-        *current_tokens += amount;
-    });
-    Ok(())
-}
-
-#[ic_cdk::query]
-fn get_user_tokens() -> u64 {
-    let caller = PrincipalWrapper(ic_cdk::caller());
-    initialize_user_tokens(&caller);
-    USER_TOKENS.with(|tokens| {
-        *tokens.borrow().get(&caller).unwrap_or(&3)
-    })
-}
-
-fn initialize_user_tokens(caller: &PrincipalWrapper) {
-    USER_TOKENS.with(|tokens| {
-        if!tokens.borrow().contains_key(caller) {
-            tokens.borrow_mut().entry(caller.clone()).or_insert(3);
-        }
-    });
-}
-
-#[ic_cdk::query]
-fn get_user_votes() -> Vec<Vote> {
-    let caller = PrincipalWrapper(ic_cdk::caller());
-    VOTES.with(|votes| {
-        votes.borrow()
-            .iter()
-            .filter(|((user, _), _)| *user == caller)
-            .map(|(_, vote)| vote.clone())
-            .collect()
-    })
-}
-
-#[ic_cdk::update]
-fn transfer_tokens(target: Principal, amount: u64) -> Result<(), Error> {
-    let caller = PrincipalWrapper(ic_cdk::caller());
-    let target = PrincipalWrapper(target);
-    if amount <= 0 {
-        return Err(Error::InvalidInput { msg: "Transfer amount must be greater than zero".to_string() });
-    }
-    
-    let caller_tokens = USER_TOKENS.with(|tokens| {
-        tokens.borrow().get(&caller).cloned().unwrap_or(3)
-    });
-    
-    if caller_tokens < amount {
-        return Err(Error::InsufficientTokens { msg: "Not enough tokens to transfer".to_string() });
-    }
-    
-    USER_TOKENS.with(|tokens| {
-        let mut tokens = tokens.borrow_mut();
-        *tokens.entry(caller).or_insert(3) -= amount;
-        *tokens.entry(target).or_insert(0) += amount;
-    });
-    Ok(())
-}
-
-#[ic_cdk::update]
-fn update_user_tokens_manually(user: Principal, new_amount: u64) -> Result<(), Error> {
-    // **CAUTION:** This function should be used sparingly and with caution.
-    // Ideally, it should be protected by an administrative canister or a more sophisticated access control mechanism.
-    let caller = ic_cdk::caller();
-    
-    let user = PrincipalWrapper(user);
-    USER_TOKENS.with(|tokens| {
-        tokens.borrow_mut().insert(user, new_amount);
-    });
-    Ok(())
-}
-
-#[ic_cdk::query]
-fn get_proposal_by_creator() -> Vec<Proposal> {
-    let creator = PrincipalWrapper(ic_cdk::caller());
-    PROPOSALS.with(|proposals| {
-        proposals
-         .borrow()
-         .iter()
-         .filter(|(_, proposal)| proposal.creator == creator)
-         .map(|(_, mut proposal)| {
-                proposal.update_status();
-                proposal
-            })
-         .collect()
-    })
-}
-
-ic_cdk::export_candid!();
